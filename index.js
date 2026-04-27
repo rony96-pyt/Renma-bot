@@ -1,3 +1,5 @@
+require('dotenv').config(); // MUST BE LINE 1
+
 const {
   Client,
   GatewayIntentBits,
@@ -12,7 +14,7 @@ const { Pool } = require('pg');
 const REQUIRED_ENV = ['DISCORD_TOKEN', 'DATABASE_URL', 'GACHA_CHANNEL_ID', 'BOT_CHANNEL_ID', 'BOOSTER_ROLE_ID', 'BOT_OWNER_ID'];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
-    console.error(`Missing env var: ${key}`);
+    console.error(`❌ Missing env var: ${key}`);
     process.exit(1);
   }
 }
@@ -51,9 +53,22 @@ async function sendPrivateMessage(targetUser, payload, fallbackChannel = null) {
 }
 
 async function initDB() {
-  await pool.query(` CREATE TABLE IF NOT EXISTS users ( user_id TEXT PRIMARY KEY, exp INTEGER DEFAULT 0, inv TEXT[] DEFAULT '{}', luck REAL DEFAULT 1, last_daily BIGINT DEFAULT 0, last_work BIGINT DEFAULT 0, last_bump BIGINT DEFAULT 0, last_message BIGINT DEFAULT 0 ); `);
-  await pool.query(` CREATE TABLE IF NOT EXISTS bot_state ( key TEXT PRIMARY KEY, value TEXT ); `);
-  console.log('Database ready.');
+  await pool.query(`CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    exp INTEGER DEFAULT 0,
+    inv TEXT[] DEFAULT '{}',
+    luck REAL DEFAULT 1,
+    last_daily BIGINT DEFAULT 0,
+    last_work BIGINT DEFAULT 0,
+    last_bump BIGINT DEFAULT 0,
+    last_message BIGINT DEFAULT 0
+  );`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS bot_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_exp ON users(exp DESC);`);
+  console.log('✅ Database ready.');
 }
 
 async function getUser(id) {
@@ -71,7 +86,11 @@ async function getUser(id) {
 }
 
 async function saveUser(id, user) {
-  await pool.query(` INSERT INTO users (user_id, exp, inv, luck, last_daily, last_work, last_bump, last_message) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id) DO UPDATE SET exp=$2, inv=$3, luck=$4, last_daily=$5, last_work=$6, last_bump=$7, last_message=$8 `, [id, user.exp, user.inv, user.luck, user.lastDaily, user.lastWork, user.lastBump, user.lastMessage]);
+  await pool.query(`INSERT INTO users (user_id, exp, inv, luck, last_daily, last_work, last_bump, last_message)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT (user_id) DO UPDATE SET
+    exp=$2, inv=$3, luck=$4, last_daily=$5, last_work=$6, last_bump=$7, last_message=$8`,
+    [id, user.exp, user.inv, user.luck, user.lastDaily, user.lastWork, user.lastBump, user.lastMessage]);
 }
 
 async function addMessageExp(userId, member) {
@@ -79,11 +98,12 @@ async function addMessageExp(userId, member) {
   let expAmount = MESSAGE_EXP;
   if (member && member.roles.cache.has(BOOSTER_ROLE_ID)) expAmount = 3;
   await pool.query('INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
-  await pool.query(` UPDATE users SET exp = exp + $2, last_message = $3 WHERE user_id = $1 AND ($3 - last_message) >= $4 `, [userId, expAmount, now, MESSAGE_COOLDOWN]);
+  await pool.query(`UPDATE users SET exp = exp + $2, last_message = $3 WHERE user_id = $1 AND ($3 - last_message) >= $4`,
+    [userId, expAmount, now, MESSAGE_COOLDOWN]);
 }
 
-async function getAllUsers() {
-  const res = await pool.query('SELECT user_id, exp FROM users ORDER BY exp DESC');
+async function getTopUsers(limit = 10) {
+  const res = await pool.query('SELECT user_id, exp FROM users ORDER BY exp DESC LIMIT $1', [limit]);
   return res.rows;
 }
 
@@ -93,7 +113,7 @@ async function getState(key) {
 }
 
 async function setState(key, value) {
-  await pool.query(` INSERT INTO bot_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2 `, [key, value]);
+  await pool.query(`INSERT INTO bot_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`, [key, value]);
 }
 
 const rewards = [
@@ -163,7 +183,7 @@ client.on('error', (err) => console.error('Client error:', err.message));
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err?.message));
 
 client.on('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({ activities: [{ name: '🎴 Anime Gacha System', type: 0 }], status: 'online' });
   try {
     const channel = await client.channels.fetch(GACHA_CHANNEL_ID);
@@ -176,8 +196,8 @@ client.on('ready', async () => {
     if (!panelExists) {
       const msg = await channel.send(buildGachaPanel());
       await setState('gacha_panel_id', msg.id);
-      console.log(`Gacha panel posted to #${channel.name}`);
-    } else { console.log('Gacha panel already exists - never deleted'); }
+      console.log(`✅ Gacha panel posted to #${channel.name}`);
+    } else { console.log('✅ Gacha panel already exists'); }
   } catch (err) { console.error('Could not post gacha panel:', err.message); }
 });
 
@@ -249,7 +269,6 @@ client.on('messageCreate', async (message) => {
           return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription(`❌ Error: ${err.message}`));
         }
       }
-
       else if (ownerCmd === 'giveexp') {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[0]);
@@ -265,7 +284,6 @@ client.on('messageCreate', async (message) => {
           return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription(`❌ Error: ${err.message}`));
         }
       }
-
       else if (ownerCmd === 'resetdaily') {
         const targetUser = message.mentions.users.first();
         if (!targetUser) {
@@ -280,8 +298,6 @@ client.on('messageCreate', async (message) => {
           return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription(`❌ Error: ${err.message}`));
         }
       }
-
-      // ✅ NEW: Reset all users' EXP to 0
       else if (ownerCmd === 'resetall') {
         try {
           await pool.query('UPDATE users SET exp = 0');
@@ -290,7 +306,6 @@ client.on('messageCreate', async (message) => {
           return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription(`❌ Error: ${err.message}`));
         }
       }
-
       else if (ownerCmd === 'stats') {
         try {
           const usersRes = await pool.query('SELECT COUNT(*) AS total_users, SUM(exp) AS total_exp FROM users');
@@ -318,7 +333,6 @@ client.on('messageCreate', async (message) => {
           return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription(`❌ Error: ${err.message}`));
         }
       }
-
       else {
         return sendCommandReply(new EmbedBuilder().setColor('#ff7675').setDescription('❌ Unknown owner command. Available: refreshpanel, giveexp, resetdaily, resetall, stats'));
       }
@@ -327,7 +341,7 @@ client.on('messageCreate', async (message) => {
 
     if (cmd === '!help') {
       const embed = new EmbedBuilder().setColor('#6c5ce7').setAuthor({ name: '📖 RENMA Command List', iconURL: client.user.displayAvatarURL() })
-        .setDescription('!gacha 🎴 — Open gacha panel\n!profile 👤 — View stats\n!daily 📅 — Claim daily EXP (2 day cooldown)\n!leaderboard 🏆 — Top 10 players\n!inventory 🎒 — View items\n!ping 🏓 — Check latency\n\n──────────────────────────\n🚀 Use `/bump` in <#${BOT_CHANNEL_ID}> daily for **+${BUMP_EXP} EXP!**')
+        .setDescription(`!gacha 🎴 — Open gacha panel\n!profile 👤 — View stats\n!daily 📅 — Claim daily EXP (2 day cooldown)\n!leaderboard 🏆 — Top 10 players\n!inventory 🎒 — View items\n!ping 🏓 — Check latency\n\n──────────────────────────\n🚀 Use \`/bump\` in <#${BOT_CHANNEL_ID}> daily for **+${BUMP_EXP} EXP!**`)
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
       return sendCommandReply(embed);
     }
@@ -353,7 +367,7 @@ client.on('messageCreate', async (message) => {
       return sendCommandReply(embed);
     }
     if (cmd === '!leaderboard') {
-      const rows = await getAllUsers(); const top10 = rows.slice(0, 10);
+      const top10 = await getTopUsers(10);
       const medals = ['🥇', '🥈', '🥉', '4', '5', '6', '7', '8', '9', '10'];
       const board = top10.length ? top10.map((r, i) => `${medals[i]} <@${r.user_id}> — ⭐ **${r.exp} EXP**`).join('\n') : '*No players yet!*';
       const embed = new EmbedBuilder().setColor('#f7b731').setAuthor({ name: '🏆 Leaderboard', iconURL: client.user.displayAvatarURL() }).setTitle('Top 10 Players').setDescription(board + '\n\n*🔥 Chat to climb ranks!*').setFooter({ text: 'RENMA SYSTEM' }).setTimestamp();
@@ -371,15 +385,13 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   try {
     if (interaction.channel.id !== GACHA_CHANNEL_ID) {
-      const reply = await interaction.reply({ content: '❌ Buttons only work in the gacha channel!', flags: MessageFlags.Ephemeral });
-      setTimeout(() => reply.delete().catch(() => {}), DELETE_AFTER);
+      await interaction.reply({ content: '❌ Buttons only work in the gacha channel!', flags: MessageFlags.Ephemeral });
       return;
     }
     const id = interaction.user.id;
     const user = await getUser(id);
     const handleEphemeral = async (payload) => {
-      const reply = await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
-      setTimeout(() => reply.delete().catch(() => {}), DELETE_AFTER);
+      await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     };
     if (interaction.customId === 'open') {
       if (user.exp < 700) {
