@@ -1,5 +1,3 @@
-require('dotenv').config(); // MUST BE LINE 1
-
 const {
   Client,
   GatewayIntentBits,
