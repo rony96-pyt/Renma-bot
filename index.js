@@ -180,7 +180,7 @@ function buildGachaPanel() {
 client.on('error', (err) => console.error('Client error:', err.message));
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err?.message));
 
-client.on('ready', async () => {
+client.on('clientReady', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({ activities: [{ name: '🎴 Anime Gacha System', type: 0 }], status: 'online' });
   try {
