@@ -19,14 +19,14 @@ for (const key of REQUIRED_ENV) {
 }
 
 const GACHA_CHANNEL_ID = process.env.GACHA_CHANNEL_ID;
-const BOT_CHANNEL_ID   = process.env.BOT_CHANNEL_ID;
-const DISBOARD_BOT_ID  = '302050872383242240';
-const DELETE_AFTER     = 15 * 60 * 1000;
-const DAILY_COOLDOWN   = 24 * 60 * 60 * 1000;
-const WORK_COOLDOWN    = 30 * 60 * 1000;
-const BUMP_COOLDOWN    = 24 * 60 * 60 * 1000;
-const MESSAGE_COOLDOWN = 10000;
-const MESSAGE_EXP      = 7;
+const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID;
+const DISBOARD_BOT_ID = '302050872383242240';
+const DELETE_AFTER = 10 * 60 * 1000; // 10 minutes
+const DAILY_COOLDOWN = 24 * 60 * 60 * 1000;
+const WORK_COOLDOWN = 30 * 60 * 1000;
+const BUMP_COOLDOWN = 24 * 60 * 60 * 1000;
+const MESSAGE_COOLDOWN = 1 * 60 * 1000; // 1 minute
+const MESSAGE_EXP = 1; // 1 EXP per message
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -34,24 +34,8 @@ const pool = new Pool({
 });
 
 async function initDB() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      user_id TEXT PRIMARY KEY,
-      exp INTEGER DEFAULT 0,
-      inv TEXT[] DEFAULT '{}',
-      luck REAL DEFAULT 1,
-      last_daily BIGINT DEFAULT 0,
-      last_work BIGINT DEFAULT 0,
-      last_bump BIGINT DEFAULT 0,
-      last_message BIGINT DEFAULT 0
-    );
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS bot_state (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-  `);
+  await pool.query(` CREATE TABLE IF NOT EXISTS users ( user_id TEXT PRIMARY KEY, exp INTEGER DEFAULT 0, inv TEXT[] DEFAULT '{}', luck REAL DEFAULT 1, last_daily BIGINT DEFAULT 0, last_work BIGINT DEFAULT 0, last_bump BIGINT DEFAULT 0, last_message BIGINT DEFAULT 0 ); `);
+  await pool.query(` CREATE TABLE IF NOT EXISTS bot_state ( key TEXT PRIMARY KEY, value TEXT ); `);
   console.log('Database ready.');
 }
 
@@ -74,21 +58,22 @@ async function getUser(id) {
 }
 
 async function saveUser(id, user) {
-  await pool.query(`
-    INSERT INTO users (user_id, exp, inv, luck, last_daily, last_work, last_bump, last_message)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    ON CONFLICT (user_id) DO UPDATE SET
-      exp=$2, inv=$3, luck=$4, last_daily=$5, last_work=$6, last_bump=$7, last_message=$8
-  `, [id, user.exp, user.inv, user.luck, user.lastDaily, user.lastWork, user.lastBump, user.lastMessage]);
+  await pool.query(` INSERT INTO users (user_id, exp, inv, luck, last_daily, last_work, last_bump, last_message) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id) DO UPDATE SET exp=$2, inv=$3, luck=$4, last_daily=$5, last_work=$6, last_bump=$7, last_message=$8 `, [id, user.exp, user.inv, user.luck, user.lastDaily, user.lastWork, user.lastBump, user.lastMessage]);
 }
 
-async function addExpAtomic(id, amount) {
+async function addMessageExp(userId, member) {
   const now = Date.now();
-  await pool.query('INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [id]);
-  await pool.query(`
-    UPDATE users SET exp = exp + $2, last_message = $3
-    WHERE user_id = $1 AND ($3 - last_message) >= $4
-  `, [id, amount, now, MESSAGE_COOLDOWN]);
+  let expAmount = MESSAGE_EXP; // 1 EXP by default
+  
+  // Check if user is a server booster
+  if (member && member.premiumSince) {
+    expAmount = 3; // Boosters get 3 EXP
+  }
+  
+  await pool.query('INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
+  await pool.query(` UPDATE users SET exp = exp + $2, last_message = $3 WHERE user_id = $1 AND ($3 - last_message) >= $4 `, [userId, expAmount, now, MESSAGE_COOLDOWN]);
+  
+  return expAmount;
 }
 
 async function getAllUsers() {
@@ -102,28 +87,25 @@ async function getState(key) {
 }
 
 async function setState(key, value) {
-  await pool.query(`
-    INSERT INTO bot_state (key, value) VALUES ($1, $2)
-    ON CONFLICT (key) DO UPDATE SET value = $2
-  `, [key, value]);
+  await pool.query(` INSERT INTO bot_state (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2 `, [key, value]);
 }
 
 const rewards = [
-  { name: '👑 2x Drop Gamepass (SP)',  chance: 0.1  },
-  { name: '👑 2x Luck Gamepass (SP)',  chance: 0.2  },
-  { name: '⭐ 250 EXP',                chance: 39.7 },
-  { name: '⭐ 500 EXP',                chance: 30   },
-  { name: '🔥 Cosmetic Crate (1x)',    chance: 20   },
-  { name: '🔥 Aura Crate (1x)',        chance: 10   }
+  { name: '👑 2x Drop Gamepass (SP)', chance: 0.1 },
+  { name: '👑 2x Luck Gamepass (SP)', chance: 0.2 },
+  { name: '⭐ 250 EXP', chance: 39.7 },
+  { name: '⭐ 500 EXP', chance: 30 },
+  { name: '🔥 Cosmetic Crate (1x)', chance: 20 },
+  { name: '🔥 Aura Crate (1x)', chance: 10 }
 ];
 
 const rarityColor = {
   '👑 2x Drop Gamepass (SP)': '#ffd700',
   '👑 2x Luck Gamepass (SP)': '#ffd700',
-  '⭐ 250 EXP':               '#a8e6cf',
-  '⭐ 500 EXP':               '#00cec9',
-  '🔥 Cosmetic Crate (1x)':   '#fd79a8',
-  '🔥 Aura Crate (1x)':       '#e17055'
+  '⭐ 250 EXP': '#a8e6cf',
+  '⭐ 500 EXP': '#00cec9',
+  '🔥 Cosmetic Crate (1x)': '#fd79a8',
+  '🔥 Aura Crate (1x)': '#e17055'
 };
 
 const workMessages = [
@@ -160,7 +142,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
@@ -168,24 +151,24 @@ function buildGachaPanel() {
   const embed = new EmbedBuilder()
     .setColor('#ff2e63')
     .setAuthor({ name: '⚔️ RENMA Gacha System', iconURL: client.user.displayAvatarURL() })
-    .setTitle('🎴  ANIME GACHA PANEL')
+    .setTitle('🎴 ANIME GACHA PANEL')
     .setDescription(
-      '> 💬 *EXP earned from chatting unlocks awesome rewards.*\n' +
-      '> *Free for everyone — does not reduce Chat Level!*\n\n' +
+      '> 💬 EXP earned from chatting unlocks awesome rewards.\n' +
+      '> Free for everyone — does not reduce Chat Level!\n\n' +
       '──────────────────────────\n\n' +
-      '🎰  **DROP RATES**\n\n' +
-      '` 0.1% ` 👑  2x Drop Gamepass (SP)\n' +
-      '` 0.2% ` 👑  2x Luck Gamepass (SP)\n' +
-      '`39.7% ` ⭐  250 EXP\n' +
-      '` 30%  ` ⭐  500 EXP\n' +
-      '` 20%  ` 🔥  Cosmetic Crate (1x)\n' +
-      '` 10%  ` 🔥  Aura Crate (1x)\n\n' +
+      '🎰 DROP RATES\n\n' +
+      '0.1% 👑 2x Drop Gamepass (SP)\n' +
+      '0.2% 👑 2x Luck Gamepass (SP)\n' +
+      '39.7% ⭐ 250 EXP\n' +
+      '30% ⭐ 500 EXP\n' +
+      '20% 🔥 Cosmetic Crate (1x)\n' +
+      '10% 🔥 Aura Crate (1x)\n\n' +
       '──────────────────────────\n\n' +
-      '🎁  **Cost:** `700 EXP`\n' +
-      `🚀  **Bump** in <#${BOT_CHANNEL_ID}> daily for **+100 EXP**\n\n` +
-      '*⚡ Choose your action below*'
+      '🎁 Cost: 700 EXP\n' +
+      `🚀 **Bump** in <#${BOT_CHANNEL_ID}> daily for **+100 EXP**\n\n` +
+      '⚡ Choose your action below'
     )
-    .setFooter({ text: 'RENMA SYSTEM  •  Become the strongest', iconURL: client.user.displayAvatarURL() })
+    .setFooter({ text: 'RENMA SYSTEM • Become the strongest', iconURL: client.user.displayAvatarURL() })
     .setTimestamp();
 
   const row1 = new ActionRowBuilder().addComponents(
@@ -210,6 +193,69 @@ async function sendAndDelete(channel, payload) {
     setTimeout(() => msg.delete().catch(() => {}), DELETE_AFTER);
   } catch (e) {
     console.error('sendAndDelete error:', e.message);
+  }
+}
+
+async function replyAndDelete(message, payload) {
+  try {
+    const reply = await message.reply(payload);
+    setTimeout(() => reply.delete().catch(() => {}), DELETE_AFTER);
+  } catch (e) {
+    console.error('replyAndDelete error:', e.message);
+  }
+}
+
+// Function to post daily leaderboard and delete old ones
+async function postDailyLeaderboard() {
+  try {
+    const channel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    // Get the current date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+    const lastLeaderboardDate = await getState('last_leaderboard_date');
+    
+    // If we already posted today, don't post again
+    if (lastLeaderboardDate === today) return;
+
+    // Get the previous leaderboard message ID and delete it
+    const lastLeaderboardId = await getState('daily_leaderboard_id');
+    if (lastLeaderboardId) {
+      try {
+        const oldMsg = await channel.messages.fetch(lastLeaderboardId);
+        await oldMsg.delete();
+        console.log('Deleted previous daily leaderboard');
+      } catch (e) {
+        // Message might already be deleted or not found
+        console.log('Previous leaderboard not found or already deleted');
+      }
+    }
+
+    // Create new leaderboard
+    const rows = await getAllUsers();
+    const top10 = rows.slice(0, 10);
+    const medals = ['🥇', '🥈', '🥉', '4', '5', '6', '7', '8', '9', '10'];
+    const board = top10.length
+      ? top10.map((r, i) => `${medals[i]}  <@${r.user_id}>  —  ⭐ **${r.exp} EXP**`).join('\n')
+      : '*No players yet — start chatting!*';
+
+    const embed = new EmbedBuilder()
+      .setColor('#f7b731')
+      .setAuthor({ name: '🏆 Daily Leaderboard', iconURL: client.user.displayAvatarURL() })
+      .setTitle(`Top Players by EXP - ${today}`)
+      .setDescription(board + '\n\n──────────────────────────\n*🔥 Chat & grind to climb the ranks!*')
+      .setFooter({ text: 'RENMA SYSTEM  •  Ranked by EXP  •  Resets daily', iconURL: client.user.displayAvatarURL() })
+      .setTimestamp();
+
+    const msg = await channel.send({ embeds: [embed] });
+    
+    // Save the new leaderboard info
+    await setState('daily_leaderboard_id', msg.id);
+    await setState('last_leaderboard_date', today);
+    
+    console.log(`Posted daily leaderboard for ${today}`);
+  } catch (err) {
+    console.error('Daily leaderboard error:', err);
   }
 }
 
@@ -245,10 +291,35 @@ client.on('ready', async () => {
     } else {
       console.log('Gacha panel already exists.');
     }
+
+    // Post daily leaderboard on startup and check every hour
+    await postDailyLeaderboard();
+    
+    // Check for new day every hour (3600000 ms)
+    setInterval(postDailyLeaderboard, 3600000);
+    
+    // Also schedule a check at midnight (using cron-like approach)
+    scheduleMidnightLeaderboard();
   } catch (err) {
-    console.error('Could not post gacha panel:', err.message);
+    console.error('Could not initialize:', err.message);
   }
 });
+
+// Function to schedule leaderboard post at midnight
+function scheduleMidnightLeaderboard() {
+  const now = new Date();
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0); // Next midnight
+  const timeUntilMidnight = midnight - now;
+  
+  setTimeout(() => {
+    postDailyLeaderboard();
+    // Then schedule again for next midnight
+    setInterval(postDailyLeaderboard, 24 * 60 * 60 * 1000); // Every 24 hours
+  }, timeUntilMidnight);
+  
+  console.log(`Scheduled next leaderboard post in ${Math.floor(timeUntilMidnight / 1000 / 60)} minutes`);
+}
 
 function isDisboardBump(message) {
   if (message.author.id !== DISBOARD_BOT_ID) return false;
@@ -278,7 +349,7 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder()
           .setColor('#ff7675')
           .setDescription(`⏳ **${discordUser.username}** bumped but already claimed today's reward.\nCome back in **${formatCooldown(remaining)}**!`)
-          .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 15 min' });
+          .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 10 min' });
         return sendAndDelete(gachaChannel, { embeds: [embed] });
       }
 
@@ -293,9 +364,9 @@ client.on('messageCreate', async (message) => {
           `<@${discordUser.id}> bumped the server and earned **+100 EXP!** ⭐\n\n` +
           `> 📊 Total EXP: **${user.exp}**\n` +
           `> 🎁 Summon cost: **700 EXP** ${user.exp >= 700 ? '— 🟢 Ready to summon!' : `— need ${700 - user.exp} more`}\n\n` +
-          `*🔁 Bump again in 24h for more EXP!*`
+          '*🔁 Bump again in 24h for more EXP!*'
         )
-        .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 15 min', iconURL: client.user.displayAvatarURL() })
+        .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 10 min', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
       return sendAndDelete(gachaChannel, { embeds: [embed] });
     }
@@ -303,7 +374,18 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
     const id = message.author.id;
-    await addExpAtomic(id, MESSAGE_EXP).catch(err => console.error('addExp error:', err.message));
+    
+    // Add EXP for message (with booster check)
+    let member = message.member;
+    if (!member && message.guild) {
+      try {
+        member = await message.guild.members.fetch(id);
+      } catch (e) {
+        console.error('Failed to fetch member:', e.message);
+      }
+    }
+    
+    await addMessageExp(id, member).catch(err => console.error('addExp error:', err.message));
 
     if (message.channel.id !== GACHA_CHANNEL_ID) return;
 
@@ -317,18 +399,18 @@ client.on('messageCreate', async (message) => {
         .setAuthor({ name: '📖 RENMA Command List', iconURL: client.user.displayAvatarURL() })
         .setTitle('All Available Commands')
         .setDescription(
-          '`!gacha` 🎴 — Open the gacha panel\n' +
-          '`!profile` 👤 — View your stats\n' +
-          '`!daily` 📅 — Claim daily EXP reward\n' +
-          '`!work` 💼 — Work for EXP (30 min cooldown)\n' +
-          '`!leaderboard` 🏆 — Top 10 players\n' +
-          '`!inventory` 🎒 — View your items\n' +
-          '`!ping` 🏓 — Check bot latency\n\n' +
+          '!gacha 🎴 — Open the gacha panel\n' +
+          '!profile 👤 — View your stats\n' +
+          '!daily 📅 — Claim daily EXP reward\n' +
+          '!work 💼 — Work for EXP (30 min cooldown)\n' +
+          '!leaderboard 🏆 — Top 10 players\n' +
+          '!inventory 🎒 — View your items\n' +
+          '!ping 🏓 — Check bot latency\n\n' +
           '──────────────────────────\n' +
-          `🚀 Use \`/bump\` in <#${BOT_CHANNEL_ID}> daily for **+100 EXP!**`
+          `🚀 Use \/bump\ in <#${BOT_CHANNEL_ID}> daily for **+100 EXP!**`
         )
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
 
     if (cmd === '!ping') {
@@ -336,24 +418,24 @@ client.on('messageCreate', async (message) => {
         .setColor('#00cec9')
         .setDescription(`🏓 **Pong!**  \`${client.ws.ping}ms\``)
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
 
-    if (cmd === '!gacha') return message.reply(buildGachaPanel());
+    if (cmd === '!gacha') return replyAndDelete(message, buildGachaPanel());
 
     if (cmd === '!profile') {
-      const bumpStatus  = (now - user.lastBump)  >= BUMP_COOLDOWN  ? '🟢 Ready' : `⏳ ${formatCooldown(BUMP_COOLDOWN  - (now - user.lastBump))}`;
+      const bumpStatus = (now - user.lastBump) >= BUMP_COOLDOWN ? '🟢 Ready' : `⏳ ${formatCooldown(BUMP_COOLDOWN - (now - user.lastBump))}`;
       const dailyStatus = (now - user.lastDaily) >= DAILY_COOLDOWN ? '🟢 Ready' : `⏳ ${formatCooldown(DAILY_COOLDOWN - (now - user.lastDaily))}`;
-      const workStatus  = (now - user.lastWork)  >= WORK_COOLDOWN  ? '🟢 Ready' : `⏳ ${formatCooldown(WORK_COOLDOWN  - (now - user.lastWork))}`;
+      const workStatus = (now - user.lastWork) >= WORK_COOLDOWN ? '🟢 Ready' : `⏳ ${formatCooldown(WORK_COOLDOWN - (now - user.lastWork))}`;
       const embed = new EmbedBuilder()
         .setColor('#08d9d6')
         .setAuthor({ name: `${message.author.username}'s Profile`, iconURL: message.author.displayAvatarURL() })
         .setThumbnail(message.author.displayAvatarURL())
         .setDescription(
           '**⭐ EXP Progress**\n' +
-          `\`${expBar(user.exp)}\`\n\n` +
-          `🍀 **Luck Multiplier:** \`${user.luck}x\`\n` +
-          `🎒 **Items Collected:** \`${user.inv.length}\`\n\n` +
+          `${expBar(user.exp)}\n\n` +
+          `🍀 **Luck Multiplier:** ${user.luck}x\n` +
+          `🎒 **Items Collected:** ${user.inv.length}\n\n` +
           '──────────────────────────\n\n' +
           `📅 **Daily:**  ${dailyStatus}\n` +
           `💼 **Work:**   ${workStatus}\n` +
@@ -362,7 +444,7 @@ client.on('messageCreate', async (message) => {
         )
         .setFooter({ text: 'RENMA RPG SYSTEM', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
 
     if (cmd === '!daily') {
@@ -372,7 +454,7 @@ client.on('messageCreate', async (message) => {
           .setColor('#ff7675')
           .setDescription(`⏳ **Daily already claimed!**\nCome back in **${formatCooldown(remaining)}**`)
           .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-        return message.reply({ embeds: [embed] });
+        return replyAndDelete(message, { embeds: [embed] });
       }
       const expGain = Math.floor(Math.random() * 200) + 100;
       user.exp += expGain;
@@ -383,11 +465,11 @@ client.on('messageCreate', async (message) => {
         .setAuthor({ name: '📅 Daily Reward Claimed!', iconURL: client.user.displayAvatarURL() })
         .setDescription(
           `✨ You received **+${expGain} EXP!**\n\n` +
-          `**Progress to Summon:**\n\`${expBar(user.exp)}\`\n\n` +
+          `**Progress to Summon:**\n${expBar(user.exp)}\n\n` +
           '*🔥 Come back tomorrow for more!*'
         )
         .setFooter({ text: 'RENMA SYSTEM  •  Resets every 24h', iconURL: client.user.displayAvatarURL() });
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
 
     if (cmd === '!work') {
@@ -397,7 +479,7 @@ client.on('messageCreate', async (message) => {
           .setColor('#ff7675')
           .setDescription(`😓 **You're tired!**\nRest for **${formatCooldown(remaining)}** before working again.`)
           .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-        return message.reply({ embeds: [embed] });
+        return replyAndDelete(message, { embeds: [embed] });
       }
       const expGain = Math.floor(Math.random() * 50) + 20;
       user.exp += expGain;
@@ -410,17 +492,17 @@ client.on('messageCreate', async (message) => {
         .setDescription(
           `${message.author.username} **${action}**!\n\n` +
           `✨ Earned **+${expGain} EXP**\n\n` +
-          `**Progress to Summon:**\n\`${expBar(user.exp)}\`\n\n` +
+          `**Progress to Summon:**\n${expBar(user.exp)}\n\n` +
           '*⏳ Next work available in 30 min*'
         )
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
 
     if (cmd === '!leaderboard') {
       const rows = await getAllUsers();
       const top10 = rows.slice(0, 10);
-      const medals = ['🥇', '🥈', '🥉', '`4`', '`5`', '`6`', '`7`', '`8`', '`9`', '`10`'];
+      const medals = ['🥇', '🥈', '🥉', '4', '5', '6', '7', '8', '9', '10'];
       const board = top10.length
         ? top10.map((r, i) => `${medals[i]}  <@${r.user_id}>  —  ⭐ **${r.exp} EXP**`).join('\n')
         : '*No players yet — start chatting!*';
@@ -431,21 +513,20 @@ client.on('messageCreate', async (message) => {
         .setDescription(board + '\n\n──────────────────────────\n*🔥 Chat & grind to climb the ranks!*')
         .setFooter({ text: 'RENMA SYSTEM  •  Ranked by EXP', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
-      return message.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+      return replyAndDelete(message, { embeds: [embed], allowedMentions: { parse: [] } });
     }
 
     if (cmd === '!inventory') {
       const items = user.inv.length
-        ? user.inv.map((item, i) => `\`${i + 1}.\` ${item}`).join('\n')
+        ? user.inv.map((item, i) => `${i + 1}. ${item}`).join('\n')
         : '*Your inventory is empty.*';
       const embed = new EmbedBuilder()
         .setColor('#6c5ce7')
         .setAuthor({ name: `${message.author.username}'s Inventory`, iconURL: message.author.displayAvatarURL() })
         .setDescription(items + '\n\n*🎁 Use !gacha to earn more items!*')
         .setFooter({ text: `${user.inv.length} item(s) collected  •  RENMA SYSTEM`, iconURL: client.user.displayAvatarURL() });
-      return message.reply({ embeds: [embed] });
+      return replyAndDelete(message, { embeds: [embed] });
     }
-
   } catch (err) {
     console.error('Message handler error:', err);
   }
@@ -465,7 +546,7 @@ client.on('interactionCreate', async (interaction) => {
       if (user.exp < 700) {
         const embed = new EmbedBuilder()
           .setColor('#ff7675')
-          .setDescription(`❌ **Not enough EXP!**\n\nYou have **${user.exp} EXP** — need **${700 - user.exp} more** to summon.\n\n\`${expBar(user.exp)}\``)
+          .setDescription(`❌ **Not enough EXP!**\n\nYou have **${user.exp} EXP** — need **${700 - user.exp} more** to summon.\n\n${expBar(user.exp)}`)
           .setFooter({ text: 'Chat to earn EXP  •  RENMA SYSTEM' });
         return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
       }
@@ -488,13 +569,13 @@ client.on('interactionCreate', async (interaction) => {
       const embed = new EmbedBuilder()
         .setColor(ready ? '#00b894' : '#fdcb6e')
         .setAuthor({ name: `${interaction.user.username}'s EXP`, iconURL: interaction.user.displayAvatarURL() })
-        .setDescription(`**Progress to Summon:**\n\`${expBar(user.exp)}\`\n\n` + (ready ? '🟢 **You have enough EXP to summon!**' : `⛔ Need **${700 - user.exp} more EXP** to summon`))
+        .setDescription(`**Progress to Summon:**\n${expBar(user.exp)}\n\n` + (ready ? '🟢 **You have enough EXP to summon!**' : `⛔ Need **${700 - user.exp} more EXP** to summon`))
         .setFooter({ text: 'RENMA SYSTEM  •  Only you can see this' });
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'inv') {
-      const items = user.inv.length ? user.inv.map((item, i) => `\`${i + 1}.\` ${item}`).join('\n') : '*Your inventory is empty.*';
+      const items = user.inv.length ? user.inv.map((item, i) => `${i + 1}. ${item}`).join('\n') : '*Your inventory is empty.*';
       const embed = new EmbedBuilder()
         .setColor('#6c5ce7')
         .setAuthor({ name: `${interaction.user.username}'s Inventory`, iconURL: interaction.user.displayAvatarURL() })
@@ -511,12 +592,11 @@ client.on('interactionCreate', async (interaction) => {
         .setColor(ready ? '#00b894' : '#fdcb6e')
         .setAuthor({ name: '🚀 Bump Reward', iconURL: client.user.displayAvatarURL() })
         .setDescription(ready
-          ? `✅ **Your bump reward is ready!**\n\nGo to <#${BOT_CHANNEL_ID}> and type \`/bump\`\nYou'll earn **+100 EXP** automatically!`
-          : `⏳ **Already claimed today!**\n\nCome back in **${formatCooldown(remaining)}**\nThen go to <#${BOT_CHANNEL_ID}> and type \`/bump\``)
+          ? `✅ **Your bump reward is ready!**\n\nGo to <#${BOT_CHANNEL_ID}> and type \/bump\nYou'll earn **+100 EXP** automatically!`
+          : `⏳ **Already claimed today!**\n\nCome back in **${formatCooldown(remaining)}**\nThen go to <#${BOT_CHANNEL_ID}> and type \/bump`)
         .setFooter({ text: 'RENMA SYSTEM  •  Only you can see this' });
       return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
-
   } catch (err) {
     console.error('Interaction error:', err.message);
   }
