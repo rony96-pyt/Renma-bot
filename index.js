@@ -21,17 +21,41 @@ for (const key of REQUIRED_ENV) {
 const GACHA_CHANNEL_ID = process.env.GACHA_CHANNEL_ID;
 const BOT_CHANNEL_ID = process.env.BOT_CHANNEL_ID;
 const DISBOARD_BOT_ID = '302050872383242240';
-const DELETE_AFTER = 10 * 60 * 1000; // 10 minutes
+const DELETE_AFTER = 10 * 60 * 1000; // 10 minutes for all non-panel messages
 const DAILY_COOLDOWN = 24 * 60 * 60 * 1000;
 const WORK_COOLDOWN = 30 * 60 * 1000;
 const BUMP_COOLDOWN = 24 * 60 * 60 * 1000;
-const MESSAGE_COOLDOWN = 1 * 60 * 1000; // 1 minute
-const MESSAGE_EXP = 1; // 1 EXP per message
+const MESSAGE_COOLDOWN = 1 * 60 * 1000; // 1 minute message cooldown
+const MESSAGE_EXP = 1; // Base EXP per message (3 for boosters)
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
+
+// Helper to send fully private messages (DM first, fallback to channel with auto-delete)
+async function sendPrivateMessage(targetUser, payload, fallbackChannel = null) {
+  try {
+    // Send DM and auto-delete after timeout
+    const dmMessage = await targetUser.send(payload);
+    setTimeout(() => {
+      dmMessage.delete().catch(err => console.error(`Failed to delete DM to ${targetUser.id}:`, err.message));
+    }, DELETE_AFTER);
+  } catch (err) {
+    console.error(`Failed to DM user ${targetUser.id}:`, err.message);
+    // Fallback: Send to channel with only target user mentioned, auto-delete
+    if (fallbackChannel) {
+      const msg = await fallbackChannel.send({
+        ...payload,
+        content: `${targetUser.toString()}, ${payload.content || ''}`.trim(),
+        allowedMentions: { users: [targetUser.id] } // Only ping the target user
+      });
+      setTimeout(() => {
+        msg.delete().catch(err => console.error(`Failed to delete fallback message:`, err.message));
+      }, DELETE_AFTER);
+    }
+  }
+}
 
 async function initDB() {
   await pool.query(` CREATE TABLE IF NOT EXISTS users ( user_id TEXT PRIMARY KEY, exp INTEGER DEFAULT 0, inv TEXT[] DEFAULT '{}', luck REAL DEFAULT 1, last_daily BIGINT DEFAULT 0, last_work BIGINT DEFAULT 0, last_bump BIGINT DEFAULT 0, last_message BIGINT DEFAULT 0 ); `);
@@ -63,11 +87,11 @@ async function saveUser(id, user) {
 
 async function addMessageExp(userId, member) {
   const now = Date.now();
-  let expAmount = MESSAGE_EXP; // 1 EXP by default
+  let expAmount = MESSAGE_EXP; // 1 EXP base
   
-  // Check if user is a server booster
+  // Boosters get 3 EXP per message
   if (member && member.premiumSince) {
-    expAmount = 3; // Boosters get 3 EXP
+    expAmount = 3;
   }
   
   await pool.query('INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
@@ -143,10 +167,11 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers // Required for booster check
   ]
 });
 
+// Main Gacha Panel - PUBLIC, NEVER DELETED, SENT ONCE ON STARTUP
 function buildGachaPanel() {
   const embed = new EmbedBuilder()
     .setColor('#ff2e63')
@@ -187,78 +212,6 @@ function buildGachaPanel() {
   return { embeds: [embed], components: [row1, row2] };
 }
 
-async function sendAndDelete(channel, payload) {
-  try {
-    const msg = await channel.send(payload);
-    setTimeout(() => msg.delete().catch(() => {}), DELETE_AFTER);
-  } catch (e) {
-    console.error('sendAndDelete error:', e.message);
-  }
-}
-
-async function replyAndDelete(message, payload) {
-  try {
-    const reply = await message.reply(payload);
-    setTimeout(() => reply.delete().catch(() => {}), DELETE_AFTER);
-  } catch (e) {
-    console.error('replyAndDelete error:', e.message);
-  }
-}
-
-// Function to post daily leaderboard and delete old ones
-async function postDailyLeaderboard() {
-  try {
-    const channel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
-    if (!channel) return;
-
-    // Get the current date in YYYY-MM-DD format
-    const today = new Date().toISOString().split('T')[0];
-    const lastLeaderboardDate = await getState('last_leaderboard_date');
-    
-    // If we already posted today, don't post again
-    if (lastLeaderboardDate === today) return;
-
-    // Get the previous leaderboard message ID and delete it
-    const lastLeaderboardId = await getState('daily_leaderboard_id');
-    if (lastLeaderboardId) {
-      try {
-        const oldMsg = await channel.messages.fetch(lastLeaderboardId);
-        await oldMsg.delete();
-        console.log('Deleted previous daily leaderboard');
-      } catch (e) {
-        // Message might already be deleted or not found
-        console.log('Previous leaderboard not found or already deleted');
-      }
-    }
-
-    // Create new leaderboard
-    const rows = await getAllUsers();
-    const top10 = rows.slice(0, 10);
-    const medals = ['🥇', '🥈', '🥉', '4', '5', '6', '7', '8', '9', '10'];
-    const board = top10.length
-      ? top10.map((r, i) => `${medals[i]}  <@${r.user_id}>  —  ⭐ **${r.exp} EXP**`).join('\n')
-      : '*No players yet — start chatting!*';
-
-    const embed = new EmbedBuilder()
-      .setColor('#f7b731')
-      .setAuthor({ name: '🏆 Daily Leaderboard', iconURL: client.user.displayAvatarURL() })
-      .setTitle(`Top Players by EXP - ${today}`)
-      .setDescription(board + '\n\n──────────────────────────\n*🔥 Chat & grind to climb the ranks!*')
-      .setFooter({ text: 'RENMA SYSTEM  •  Ranked by EXP  •  Resets daily', iconURL: client.user.displayAvatarURL() })
-      .setTimestamp();
-
-    const msg = await channel.send({ embeds: [embed] });
-    
-    // Save the new leaderboard info
-    await setState('daily_leaderboard_id', msg.id);
-    await setState('last_leaderboard_date', today);
-    
-    console.log(`Posted daily leaderboard for ${today}`);
-  } catch (err) {
-    console.error('Daily leaderboard error:', err);
-  }
-}
-
 client.on('error', (err) => console.error('Client error:', err.message));
 process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err?.message));
 
@@ -275,6 +228,7 @@ client.on('ready', async () => {
 
     const savedPanelId = await getState('gacha_panel_id');
     let panelExists = false;
+    
     if (savedPanelId) {
       try {
         await channel.messages.fetch(savedPanelId);
@@ -284,42 +238,18 @@ client.on('ready', async () => {
       }
     }
 
+    // Only send main panel once on startup, NEVER DELETE
     if (!panelExists) {
       const msg = await channel.send(buildGachaPanel());
       await setState('gacha_panel_id', msg.id);
       console.log(`Gacha panel posted to #${channel.name}`);
     } else {
-      console.log('Gacha panel already exists.');
+      console.log('Gacha panel already exists - persisting forever');
     }
-
-    // Post daily leaderboard on startup and check every hour
-    await postDailyLeaderboard();
-    
-    // Check for new day every hour (3600000 ms)
-    setInterval(postDailyLeaderboard, 3600000);
-    
-    // Also schedule a check at midnight (using cron-like approach)
-    scheduleMidnightLeaderboard();
   } catch (err) {
-    console.error('Could not initialize:', err.message);
+    console.error('Could not post gacha panel:', err.message);
   }
 });
-
-// Function to schedule leaderboard post at midnight
-function scheduleMidnightLeaderboard() {
-  const now = new Date();
-  const midnight = new Date();
-  midnight.setHours(24, 0, 0, 0); // Next midnight
-  const timeUntilMidnight = midnight - now;
-  
-  setTimeout(() => {
-    postDailyLeaderboard();
-    // Then schedule again for next midnight
-    setInterval(postDailyLeaderboard, 24 * 60 * 60 * 1000); // Every 24 hours
-  }, timeUntilMidnight);
-  
-  console.log(`Scheduled next leaderboard post in ${Math.floor(timeUntilMidnight / 1000 / 60)} minutes`);
-}
 
 function isDisboardBump(message) {
   if (message.author.id !== DISBOARD_BOT_ID) return false;
@@ -334,6 +264,7 @@ function getBumper(message) {
 
 client.on('messageCreate', async (message) => {
   try {
+    // Handle Disboard bump rewards (private to bumper)
     if (message.author.bot && message.author.id === DISBOARD_BOT_ID) {
       if (!isDisboardBump(message)) return;
       const discordUser = getBumper(message);
@@ -343,16 +274,18 @@ client.on('messageCreate', async (message) => {
       const now = Date.now();
       const remaining = BUMP_COOLDOWN - (now - user.lastBump);
       const gachaChannel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
-      if (!gachaChannel) return;
 
       if (remaining > 0) {
         const embed = new EmbedBuilder()
           .setColor('#ff7675')
           .setDescription(`⏳ **${discordUser.username}** bumped but already claimed today's reward.\nCome back in **${formatCooldown(remaining)}**!`)
           .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 10 min' });
-        return sendAndDelete(gachaChannel, { embeds: [embed] });
+        const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+        if (userObj) await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+        return;
       }
 
+      // Grant bump reward
       user.exp += 100;
       user.lastBump = now;
       await saveUser(discordUser.id, user);
@@ -361,21 +294,24 @@ client.on('messageCreate', async (message) => {
         .setColor('#00b894')
         .setAuthor({ name: '🚀 Server Bumped!', iconURL: client.user.displayAvatarURL() })
         .setDescription(
-          `<@${discordUser.id}> bumped the server and earned **+100 EXP!** ⭐\n\n` +
+          `You bumped the server and earned **+100 EXP!** ⭐\n\n` +
           `> 📊 Total EXP: **${user.exp}**\n` +
           `> 🎁 Summon cost: **700 EXP** ${user.exp >= 700 ? '— 🟢 Ready to summon!' : `— need ${700 - user.exp} more`}\n\n` +
           '*🔁 Bump again in 24h for more EXP!*'
         )
-        .setFooter({ text: 'RENMA SYSTEM  •  Deletes in 10 min', iconURL: client.user.displayAvatarURL() })
+        .setFooter({ text: 'RENMA SYSTEM  •  Private Bump Reward', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
-      return sendAndDelete(gachaChannel, { embeds: [embed] });
+
+      const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+      if (userObj) await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+      return;
     }
 
     if (message.author.bot) return;
 
     const id = message.author.id;
     
-    // Add EXP for message (with booster check)
+    // Silent EXP gain from messages (no public messages)
     let member = message.member;
     if (!member && message.guild) {
       try {
@@ -384,14 +320,19 @@ client.on('messageCreate', async (message) => {
         console.error('Failed to fetch member:', e.message);
       }
     }
-    
     await addMessageExp(id, member).catch(err => console.error('addExp error:', err.message));
 
+    // Only process commands in gacha channel
     if (message.channel.id !== GACHA_CHANNEL_ID) return;
 
     const user = await getUser(id);
     const now = Date.now();
     const cmd = message.content.toLowerCase().trim();
+
+    // Helper to send all command replies as private, auto-delete
+    const sendCommandReply = async (embed) => {
+      await sendPrivateMessage(message.author, { embeds: [embed] }, message.channel);
+    };
 
     if (cmd === '!help') {
       const embed = new EmbedBuilder()
@@ -410,7 +351,7 @@ client.on('messageCreate', async (message) => {
           `🚀 Use \/bump\ in <#${BOT_CHANNEL_ID}> daily for **+100 EXP!**`
         )
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
 
     if (cmd === '!ping') {
@@ -418,10 +359,10 @@ client.on('messageCreate', async (message) => {
         .setColor('#00cec9')
         .setDescription(`🏓 **Pong!**  \`${client.ws.ping}ms\``)
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
 
-    if (cmd === '!gacha') return replyAndDelete(message, buildGachaPanel());
+    if (cmd === '!gacha') return sendCommandReply(buildGachaPanel());
 
     if (cmd === '!profile') {
       const bumpStatus = (now - user.lastBump) >= BUMP_COOLDOWN ? '🟢 Ready' : `⏳ ${formatCooldown(BUMP_COOLDOWN - (now - user.lastBump))}`;
@@ -444,7 +385,7 @@ client.on('messageCreate', async (message) => {
         )
         .setFooter({ text: 'RENMA RPG SYSTEM', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
 
     if (cmd === '!daily') {
@@ -454,7 +395,7 @@ client.on('messageCreate', async (message) => {
           .setColor('#ff7675')
           .setDescription(`⏳ **Daily already claimed!**\nCome back in **${formatCooldown(remaining)}**`)
           .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-        return replyAndDelete(message, { embeds: [embed] });
+        return sendCommandReply(embed);
       }
       const expGain = Math.floor(Math.random() * 200) + 100;
       user.exp += expGain;
@@ -469,7 +410,7 @@ client.on('messageCreate', async (message) => {
           '*🔥 Come back tomorrow for more!*'
         )
         .setFooter({ text: 'RENMA SYSTEM  •  Resets every 24h', iconURL: client.user.displayAvatarURL() });
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
 
     if (cmd === '!work') {
@@ -479,7 +420,7 @@ client.on('messageCreate', async (message) => {
           .setColor('#ff7675')
           .setDescription(`😓 **You're tired!**\nRest for **${formatCooldown(remaining)}** before working again.`)
           .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-        return replyAndDelete(message, { embeds: [embed] });
+        return sendCommandReply(embed);
       }
       const expGain = Math.floor(Math.random() * 50) + 20;
       user.exp += expGain;
@@ -496,7 +437,7 @@ client.on('messageCreate', async (message) => {
           '*⏳ Next work available in 30 min*'
         )
         .setFooter({ text: 'RENMA SYSTEM', iconURL: client.user.displayAvatarURL() });
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
 
     if (cmd === '!leaderboard') {
@@ -513,7 +454,7 @@ client.on('messageCreate', async (message) => {
         .setDescription(board + '\n\n──────────────────────────\n*🔥 Chat & grind to climb the ranks!*')
         .setFooter({ text: 'RENMA SYSTEM  •  Ranked by EXP', iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
-      return replyAndDelete(message, { embeds: [embed], allowedMentions: { parse: [] } });
+      return sendCommandReply(embed);
     }
 
     if (cmd === '!inventory') {
@@ -525,7 +466,7 @@ client.on('messageCreate', async (message) => {
         .setAuthor({ name: `${message.author.username}'s Inventory`, iconURL: message.author.displayAvatarURL() })
         .setDescription(items + '\n\n*🎁 Use !gacha to earn more items!*')
         .setFooter({ text: `${user.inv.length} item(s) collected  •  RENMA SYSTEM`, iconURL: client.user.displayAvatarURL() });
-      return replyAndDelete(message, { embeds: [embed] });
+      return sendCommandReply(embed);
     }
   } catch (err) {
     console.error('Message handler error:', err);
@@ -536,11 +477,21 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   try {
     if (interaction.channel.id !== GACHA_CHANNEL_ID) {
-      return interaction.reply({ content: '❌ Buttons only work in the gacha channel!', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: '❌ Buttons only work in the gacha channel!', flags: MessageFlags.Ephemeral });
+      const replyMsg = await interaction.fetchReply();
+      setTimeout(() => replyMsg.delete().catch(() => {}), DELETE_AFTER);
+      return;
     }
 
     const id = interaction.user.id;
     const user = await getUser(id);
+
+    // All button interactions are ephemeral (private to clicker) and auto-delete
+    const handleInteractionReply = async (payload) => {
+      await interaction.reply(payload);
+      const replyMsg = await interaction.fetchReply();
+      setTimeout(() => replyMsg.delete().catch(e => {}), DELETE_AFTER);
+    };
 
     if (interaction.customId === 'open') {
       if (user.exp < 700) {
@@ -548,7 +499,7 @@ client.on('interactionCreate', async (interaction) => {
           .setColor('#ff7675')
           .setDescription(`❌ **Not enough EXP!**\n\nYou have **${user.exp} EXP** — need **${700 - user.exp} more** to summon.\n\n${expBar(user.exp)}`)
           .setFooter({ text: 'Chat to earn EXP  •  RENMA SYSTEM' });
-        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return handleInteractionReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
       }
       user.exp -= 700;
       const reward = rollReward(user.luck);
@@ -561,7 +512,7 @@ client.on('interactionCreate', async (interaction) => {
         .setDescription(`✨  **${reward}**\n\n──────────────────────────\n📊 EXP remaining: **${user.exp}**\n🎒 Items owned: **${user.inv.length}**\n\n*🔥 RNG favors the bold...*`)
         .setFooter({ text: 'Keep summoning for legendary drops  •  RENMA SYSTEM' })
         .setTimestamp();
-      return interaction.reply({ embeds: [embed] });
+      return handleInteractionReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'exp') {
@@ -571,7 +522,7 @@ client.on('interactionCreate', async (interaction) => {
         .setAuthor({ name: `${interaction.user.username}'s EXP`, iconURL: interaction.user.displayAvatarURL() })
         .setDescription(`**Progress to Summon:**\n${expBar(user.exp)}\n\n` + (ready ? '🟢 **You have enough EXP to summon!**' : `⛔ Need **${700 - user.exp} more EXP** to summon`))
         .setFooter({ text: 'RENMA SYSTEM  •  Only you can see this' });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return handleInteractionReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'inv') {
@@ -581,7 +532,7 @@ client.on('interactionCreate', async (interaction) => {
         .setAuthor({ name: `${interaction.user.username}'s Inventory`, iconURL: interaction.user.displayAvatarURL() })
         .setDescription(items)
         .setFooter({ text: `${user.inv.length} item(s)  •  RENMA SYSTEM  •  Only you can see this` });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return handleInteractionReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'bump_reward') {
@@ -595,7 +546,7 @@ client.on('interactionCreate', async (interaction) => {
           ? `✅ **Your bump reward is ready!**\n\nGo to <#${BOT_CHANNEL_ID}> and type \/bump\nYou'll earn **+100 EXP** automatically!`
           : `⏳ **Already claimed today!**\n\nCome back in **${formatCooldown(remaining)}**\nThen go to <#${BOT_CHANNEL_ID}> and type \/bump`)
         .setFooter({ text: 'RENMA SYSTEM  •  Only you can see this' });
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return handleInteractionReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
     console.error('Interaction error:', err.message);
