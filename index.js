@@ -37,6 +37,7 @@ const BUMP_COOLDOWN = 24 * 60 * 60 * 1000;
 const MESSAGE_COOLDOWN = 1 * 60 * 1000;
 const MESSAGE_EXP = 1;
 const BUMP_EXP = 5;
+const SUMMON_COST = 700;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -194,8 +195,8 @@ async function setState(key, value) {
 const rewards = [
   { name: '👑 2x Drop Gamepass (SP)', chance: 0.1 },
   { name: '👑 2x Luck Gamepass (SP)', chance: 0.2 },
-  { name: '⭐ 250 EXP', chance: 39.7 },
-  { name: '⭐ 500 EXP', chance: 30 },
+  { name: '⭐ 15 EXP', chance: 39.7 },
+  { name: '⭐ 25 EXP', chance: 30 },
   { name: '🔥 Cosmetic Crate (1x)', chance: 20 },
   { name: '🔥 Aura Crate (1x)', chance: 10 }
 ];
@@ -203,8 +204,8 @@ const rewards = [
 const rarityColor = {
   '👑 2x Drop Gamepass (SP)': '#ffd700',
   '👑 2x Luck Gamepass (SP)': '#ffd700',
-  '⭐ 250 EXP': '#a8e6cf',
-  '⭐ 500 EXP': '#00cec9',
+  '⭐ 15 EXP': '#a8e6cf',
+  '⭐ 25 EXP': '#00cec9',
   '🔥 Cosmetic Crate (1x)': '#fd79a8',
   '🔥 Aura Crate (1x)': '#e17055'
 };
@@ -233,7 +234,7 @@ function formatCooldown(ms) {
   return `${s}s`;
 }
 
-function expBar(exp, needed = 700) {
+function expBar(exp, needed = SUMMON_COST) {
   const filled = Math.min(Math.floor((exp / needed) * 10), 10);
   return `${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${exp}/${needed}`;
 }
@@ -265,14 +266,14 @@ function buildGachaPanel() {
 
 0.1% 👑 2x Drop Gamepass (SP)
 0.2% 👑 2x Luck Gamepass (SP)
-39.7% ⭐ 250 EXP
-30% ⭐ 500 EXP
+39.7% ⭐ 15 EXP
+30% ⭐ 25 EXP
 20% 🔥 Cosmetic Crate (1x)
 10% 🔥 Aura Crate (1x)
 
 ──────────────────────────
 
-🎁 Cost: 700 EXP
+🎁 Cost: ${SUMMON_COST} EXP
 🚀 **Bump** in <#${BOT_CHANNEL_ID}> daily for **+${BUMP_EXP} EXP**
 
 ⚡ Choose your action below`
@@ -320,8 +321,8 @@ client.on('ready', async () => {
   });
 
   try {
-    const channel = await client.channels.fetch(GACHA_CHANNEL_ID);
-    if (!channel) return;
+    const channel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
 
     const savedPanelId = await getState('gacha_panel_id');
     let panelExists = false;
@@ -353,9 +354,7 @@ function isDisboardBump(message) {
   const text =
     (message.content || '') +
     ' ' +
-    message.embeds
-      .map((e) => `${e.description || ''} ${e.title || ''}`)
-      .join(' ');
+    message.embeds.map((e) => `${e.description || ''} ${e.title || ''}`).join(' ');
 
   return /bump done/i.test(text);
 }
@@ -394,6 +393,11 @@ client.on('messageCreate', async (message) => {
       user.lastBump = now;
       await saveUser(discordUser.id, user);
 
+      const summonStatus =
+        user.exp >= SUMMON_COST
+          ? '- 🟢 Ready to summon!'
+          : `- need ${SUMMON_COST - user.exp} more`;
+
       const embed = new EmbedBuilder()
         .setColor('#00b894')
         .setAuthor({
@@ -404,7 +408,7 @@ client.on('messageCreate', async (message) => {
           `You bumped the server and earned **+${BUMP_EXP} EXP!** ⭐
 
 > 📊 Total EXP: **${user.exp}**
-> 🎁 Summon cost: **700 EXP** ${user.exp >= 700 ? '- 🟢 Ready to summon!' : `- need ${700 - user.exp} more`}
+> 🎁 Summon cost: **${SUMMON_COST} EXP** ${summonStatus}
 
 *🔁 Bump again in 24h*`
         )
@@ -414,10 +418,10 @@ client.on('messageCreate', async (message) => {
         })
         .setTimestamp();
 
-      const userObj = await client.users.fetch(discordUser.id).catch(() => null);
-      if (userObj) {
-        await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
-      }
+        const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+        if (userObj) {
+          await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+        }
 
       return;
     }
@@ -437,10 +441,6 @@ client.on('messageCreate', async (message) => {
       console.error('addExp error:', err.message)
     );
 
-    if (message.channel.id !== GACHA_CHANNEL_ID) return;
-
-    const user = await getUser(id);
-    const now = Date.now();
     const cmd = message.content.toLowerCase().trim();
 
     const sendCommandReply = async (payload) => {
@@ -459,13 +459,14 @@ client.on('messageCreate', async (message) => {
         );
       }
 
-      const args = message.content.slice(7).trim().split(/ +/);
+      const args = message.content.trim().split(/\s+/).slice(1);
       const ownerCmd = (args.shift() || '').toLowerCase();
 
       if (ownerCmd === 'refreshpanel') {
         try {
-          const channel = await client.channels.fetch(GACHA_CHANNEL_ID);
-          if (!channel) {
+          const channel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+
+          if (!channel || !channel.isTextBased()) {
             return sendCommandReply(
               new EmbedBuilder()
                 .setColor('#ff7675')
@@ -475,9 +476,10 @@ client.on('messageCreate', async (message) => {
 
           const oldPanelId = await getState('gacha_panel_id');
           if (oldPanelId) {
-            try {
-              await channel.messages.delete(oldPanelId);
-            } catch {}
+            const oldMsg = await channel.messages.fetch(oldPanelId).catch(() => null);
+            if (oldMsg) {
+              await oldMsg.delete().catch(() => {});
+            }
           }
 
           const msg = await channel.send(buildGachaPanel());
@@ -495,7 +497,9 @@ client.on('messageCreate', async (message) => {
               .setDescription(`❌ Error: ${err.message}`)
           );
         }
-      } else if (ownerCmd === 'giveexp') {
+      }
+
+      else if (ownerCmd === 'giveexp') {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[1], 10);
 
@@ -524,7 +528,9 @@ client.on('messageCreate', async (message) => {
               .setDescription(`❌ Error: ${err.message}`)
           );
         }
-      } else if (ownerCmd === 'resetdaily') {
+      }
+
+      else if (ownerCmd === 'resetdaily') {
         const targetUser = message.mentions.users.first();
 
         if (!targetUser) {
@@ -552,7 +558,9 @@ client.on('messageCreate', async (message) => {
               .setDescription(`❌ Error: ${err.message}`)
           );
         }
-      } else if (ownerCmd === 'resetall') {
+      }
+
+      else if (ownerCmd === 'resetall' || ownerCmd === 'resetexp') {
         try {
           await pool.query('UPDATE users SET exp = 0');
 
@@ -568,7 +576,9 @@ client.on('messageCreate', async (message) => {
               .setDescription(`❌ Error: ${err.message}`)
           );
         }
-      } else if (ownerCmd === 'stats') {
+      }
+
+      else if (ownerCmd === 'stats') {
         try {
           const usersRes = await pool.query(
             'SELECT COUNT(*) AS total_users, SUM(exp) AS total_exp FROM users'
@@ -581,8 +591,8 @@ client.on('messageCreate', async (message) => {
           let boosterCount = 0;
 
           try {
-            const gachaChannel = await client.channels.fetch(GACHA_CHANNEL_ID);
-            if (gachaChannel.guild) {
+            const gachaChannel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+            if (gachaChannel?.guild) {
               const boosterRole = gachaChannel.guild.roles.cache.get(BOOSTER_ROLE_ID);
               if (boosterRole) boosterCount = boosterRole.members.size;
             }
@@ -610,14 +620,21 @@ client.on('messageCreate', async (message) => {
               .setDescription(`❌ Error: ${err.message}`)
           );
         }
-      } else {
+      }
+
+      else {
         return sendCommandReply(
           new EmbedBuilder()
             .setColor('#ff7675')
-            .setDescription('❌ Unknown owner command. Available: refreshpanel, giveexp, resetdaily, resetall, stats')
+            .setDescription('❌ Unknown owner command. Available: refreshpanel, giveexp, resetdaily, resetall/resetexp, stats')
         );
       }
     }
+
+    if (message.channel.id !== GACHA_CHANNEL_ID) return;
+
+    const user = await getUser(id);
+    const now = Date.now();
 
     if (cmd === '!help') {
       const embed = new EmbedBuilder()
@@ -786,7 +803,7 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
   try {
-    if (interaction.channel.id !== GACHA_CHANNEL_ID) {
+    if (!interaction.channel || interaction.channel.id !== GACHA_CHANNEL_ID) {
       await interaction.reply({
         content: '❌ Buttons only work in the gacha channel!',
         flags: MessageFlags.Ephemeral
@@ -809,20 +826,32 @@ client.on('interactionCreate', async (interaction) => {
     };
 
     if (interaction.customId === 'open') {
-      if (user.exp < 700) {
+      if (user.exp < SUMMON_COST) {
         return handleEphemeral({
           embeds: [
             new EmbedBuilder()
               .setColor('#ff7675')
-              .setDescription(`❌ Need **${700 - user.exp} more EXP** to summon.\n\n${expBar(user.exp)}`)
+              .setDescription(`❌ Need **${SUMMON_COST - user.exp} more EXP** to summon.\n\n${expBar(user.exp)}`)
               .setFooter({ text: 'Chat to earn EXP' })
           ]
         });
       }
 
-      user.exp -= 700;
+      user.exp -= SUMMON_COST;
       const reward = rollReward(user.luck);
-      user.inv.push(reward);
+
+      let rewardText = reward;
+
+      if (reward === '⭐ 15 EXP') {
+        user.exp += 15;
+        rewardText = '⭐ **15 EXP** added instantly!';
+      } else if (reward === '⭐ 25 EXP') {
+        user.exp += 25;
+        rewardText = '⭐ **25 EXP** added instantly!';
+      } else {
+        user.inv.push(reward);
+      }
+
       await saveUser(id, user);
 
       return handleEphemeral({
@@ -835,7 +864,7 @@ client.on('interactionCreate', async (interaction) => {
             })
             .setTitle('🎉 YOU SUMMONED')
             .setDescription(
-              `✨ **${reward}**
+              `✨ ${rewardText}
 
 ──────────────────────────
 📊 EXP left: **${user.exp}**
@@ -850,7 +879,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.customId === 'exp') {
-      const ready = user.exp >= 700;
+      const ready = user.exp >= SUMMON_COST;
 
       return handleEphemeral({
         embeds: [
@@ -864,7 +893,7 @@ client.on('interactionCreate', async (interaction) => {
               `**Progress:**
 ${expBar(user.exp)}
 
-${ready ? '🟢 Ready to summon!' : `⛔ Need **${700 - user.exp} more EXP**`}`
+${ready ? '🟢 Ready to summon!' : `⛔ Need **${SUMMON_COST - user.exp} more EXP**`}`
             )
             .setFooter({ text: 'Only you can see this' })
         ]
@@ -917,4 +946,9 @@ ${ready ? '🟢 Ready to summon!' : `⛔ Need **${700 - user.exp} more EXP**`}`
   }
 });
 
-initDB().then(() => client.login(process.env.DISCORD_TOKEN));
+initDB()
+  .then(() => client.login(process.env.DISCORD_TOKEN))
+  .catch((err) => {
+    console.error('Startup error:', err);
+    process.exit(1);
+  });
