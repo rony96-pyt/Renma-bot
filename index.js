@@ -336,7 +336,7 @@ function buildHelpEmbed() {
     .setDescription(
       `**Slash Commands**
 /help — Show this menu
-/gacha — View gacha info
+/gacha — Show public gacha panel
 /profile — View your stats
 /daily — Claim daily EXP
 /leaderboard — Top 10 players
@@ -491,7 +491,7 @@ function buildSlashCommands() {
 
     new SlashCommandBuilder()
       .setName('gacha')
-      .setDescription('View gacha information'),
+      .setDescription('Show public gacha panel'),
 
     new SlashCommandBuilder()
       .setName('profile')
@@ -901,11 +901,13 @@ async function handleSlashCommand(interaction) {
     });
   }
 
+  // PUBLIC GACHA UI - everyone sees it, never auto-deletes
   if (commandName === 'gacha') {
     const panel = buildGachaPanel();
 
-    return replyEphemeral(interaction, {
-      embeds: panel.embeds
+    return interaction.reply({
+      embeds: panel.embeds,
+      components: panel.components
     });
   }
 
@@ -1114,9 +1116,9 @@ client.on('messageCreate', async (message) => {
       return sendCommandReply(buildPingEmbed());
     }
 
+    // PUBLIC GACHA UI - everyone sees it, never auto-deletes
     if (cmd === '!gacha') {
-      const panel = buildGachaPanel();
-      return sendCommandReply({ embeds: panel.embeds });
+      return message.channel.send(buildGachaPanel());
     }
 
     if (cmd === '!profile') {
