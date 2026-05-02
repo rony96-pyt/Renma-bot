@@ -657,4 +657,640 @@ async function handleOwnerPrefix(message, sendCommandReply) {
     }
   }
 
-  if (ownerCmd === 'giveexp') 
+  if (ownerCmd === 'giveexp') {
+    const targetUser = message.mentions.users.first();
+    const amount = parseInt(args[1], 10);
+
+    if (!targetUser || isNaN(amount) || amount <= 0) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription('❌ Usage: `!owner giveexp @user <positive amount>`')
+      );
+    }
+
+    try {
+      const targetData = await getUser(targetUser.id);
+      targetData.exp += amount;
+      await saveUser(targetUser.id, targetData);
+
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#00b894')
+          .setDescription(`✅ Gave **${amount} EXP** to <@${targetUser.id}>. New total: **${targetData.exp}**`)
+      );
+    } catch (err) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription(`❌ Error: ${err.message}`)
+      );
+    }
+  }
+
+  if (ownerCmd === 'resetdaily') {
+    const targetUser = message.mentions.users.first();
+
+    if (!targetUser) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription('❌ Usage: `!owner resetdaily @user`')
+      );
+    }
+
+    try {
+      const targetData = await getUser(targetUser.id);
+      targetData.lastDaily = 0;
+      await saveUser(targetUser.id, targetData);
+
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#00b894')
+          .setDescription(`✅ Reset daily cooldown for <@${targetUser.id}>. They can claim daily immediately.`)
+      );
+    } catch (err) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription(`❌ Error: ${err.message}`)
+      );
+    }
+  }
+
+  if (ownerCmd === 'resetall' || ownerCmd === 'resetexp') {
+    try {
+      await pool.query('UPDATE users SET exp = 0');
+
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#00b894')
+          .setDescription("✅ All users' EXP has been reset to 0. Inventory, luck, and cooldowns remain unchanged.")
+      );
+    } catch (err) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription(`❌ Error: ${err.message}`)
+      );
+    }
+  }
+
+  if (ownerCmd === 'stats') {
+    try {
+      return sendCommandReply(await buildOwnerStatsEmbed());
+    } catch (err) {
+      return sendCommandReply(
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription(`❌ Error: ${err.message}`)
+      );
+    }
+  }
+
+  return sendCommandReply(
+    new EmbedBuilder()
+      .setColor('#ff7675')
+      .setDescription('❌ Unknown owner command. Available: refreshpanel, giveexp, resetdaily, resetall/resetexp, stats')
+  );
+}
+
+async function handleOwnerSlash(interaction) {
+  if (interaction.user.id !== BOT_OWNER_ID) {
+    return replyEphemeral(interaction, {
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription('❌ Only the bot owner can use this command.')
+      ]
+    });
+  }
+
+  const sub = interaction.options.getSubcommand();
+
+  if (sub === 'refreshpanel') {
+    try {
+      await refreshGachaPanel();
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00b894')
+            .setDescription('✅ Gacha panel refreshed successfully!')
+        ]
+      });
+    } catch (err) {
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff7675')
+            .setDescription(`❌ Error: ${err.message}`)
+        ]
+      });
+    }
+  }
+
+  if (sub === 'giveexp') {
+    const targetUser = interaction.options.getUser('user', true);
+    const amount = interaction.options.getInteger('amount', true);
+
+    try {
+      const targetData = await getUser(targetUser.id);
+      targetData.exp += amount;
+      await saveUser(targetUser.id, targetData);
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00b894')
+            .setDescription(`✅ Gave **${amount} EXP** to <@${targetUser.id}>. New total: **${targetData.exp}**`)
+        ]
+      });
+    } catch (err) {
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff7675')
+            .setDescription(`❌ Error: ${err.message}`)
+        ]
+      });
+    }
+  }
+
+  if (sub === 'resetdaily') {
+    const targetUser = interaction.options.getUser('user', true);
+
+    try {
+      const targetData = await getUser(targetUser.id);
+      targetData.lastDaily = 0;
+      await saveUser(targetUser.id, targetData);
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00b894')
+            .setDescription(`✅ Reset daily cooldown for <@${targetUser.id}>. They can claim daily immediately.`)
+        ]
+      });
+    } catch (err) {
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff7675')
+            .setDescription(`❌ Error: ${err.message}`)
+        ]
+      });
+    }
+  }
+
+  if (sub === 'resetall' || sub === 'resetexp') {
+    try {
+      await pool.query('UPDATE users SET exp = 0');
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#00b894')
+            .setDescription("✅ All users' EXP has been reset to 0. Inventory, luck, and cooldowns remain unchanged.")
+        ]
+      });
+    } catch (err) {
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff7675')
+            .setDescription(`❌ Error: ${err.message}`)
+        ]
+      });
+    }
+  }
+
+  if (sub === 'stats') {
+    try {
+      return replyEphemeral(interaction, {
+        embeds: [await buildOwnerStatsEmbed()]
+      });
+    } catch (err) {
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#ff7675')
+            .setDescription(`❌ Error: ${err.message}`)
+        ]
+      });
+    }
+  }
+}
+
+async function handleSlashCommand(interaction) {
+  const commandName = interaction.commandName;
+
+  if (commandName === 'owner') {
+    return handleOwnerSlash(interaction);
+  }
+
+  if (commandName === 'help') {
+    return replyEphemeral(interaction, {
+      embeds: [buildHelpEmbed()]
+    });
+  }
+
+  if (commandName === 'ping') {
+    return replyEphemeral(interaction, {
+      embeds: [buildPingEmbed()]
+    });
+  }
+
+  if (commandName === 'gacha') {
+    const panel = buildGachaPanel();
+
+    return replyEphemeral(interaction, {
+      embeds: panel.embeds
+    });
+  }
+
+  if (commandName === 'profile') {
+    const user = await getUser(interaction.user.id);
+
+    return replyEphemeral(interaction, {
+      embeds: [buildProfileEmbed(interaction.user, user)]
+    });
+  }
+
+  if (commandName === 'daily') {
+    const embed = await claimDailyEmbed(interaction.user.id);
+
+    return replyEphemeral(interaction, {
+      embeds: [embed]
+    });
+  }
+
+  if (commandName === 'leaderboard') {
+    const embed = await buildLeaderboardEmbed();
+
+    return replyEphemeral(interaction, {
+      embeds: [embed]
+    });
+  }
+
+  if (commandName === 'inventory') {
+    const user = await getUser(interaction.user.id);
+
+    return replyEphemeral(interaction, {
+      embeds: [buildInventoryEmbed(interaction.user, user, true)]
+    });
+  }
+}
+
+client.on('error', (err) => console.error('Client error:', err.message));
+process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
+
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+
+  client.user.setPresence({
+    activities: [{ name: '🎴 Anime Gacha System', type: 0 }],
+    status: 'online'
+  });
+
+  try {
+    const channel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+
+    if (channel?.guild) {
+      await channel.guild.commands.set(buildSlashCommands());
+      console.log(`Slash commands registered in guild: ${channel.guild.name}`);
+    } else {
+      await client.application.commands.set(buildSlashCommands());
+      console.log('Global slash commands registered.');
+    }
+
+    if (!channel || !channel.isTextBased()) return;
+
+    const savedPanelId = await getState('gacha_panel_id');
+    let panelExists = false;
+
+    if (savedPanelId) {
+      try {
+        await channel.messages.fetch(savedPanelId);
+        panelExists = true;
+      } catch {
+        panelExists = false;
+      }
+    }
+
+    if (!panelExists) {
+      const msg = await channel.send(buildGachaPanel());
+      await setState('gacha_panel_id', msg.id);
+      console.log(`Gacha panel posted to #${channel.name}`);
+    } else {
+      console.log('Gacha panel already exists - never deleted');
+    }
+  } catch (err) {
+    console.error('Ready error:', err.message);
+  }
+});
+
+function isDisboardBump(message) {
+  if (message.author.id !== DISBOARD_BOT_ID) return false;
+
+  const text =
+    (message.content || '') +
+    ' ' +
+    message.embeds.map((e) => `${e.description || ''} ${e.title || ''}`).join(' ');
+
+  return /bump done/i.test(text);
+}
+
+function getBumper(message) {
+  return message.interactionMetadata?.user || message.interaction?.user || null;
+}
+
+client.on('messageCreate', async (message) => {
+  try {
+    if (message.author.bot && message.author.id === DISBOARD_BOT_ID) {
+      if (!isDisboardBump(message)) return;
+
+      const discordUser = getBumper(message);
+      if (!discordUser) return;
+
+      const user = await getUser(discordUser.id);
+      const now = Date.now();
+      const remaining = BUMP_COOLDOWN - (now - user.lastBump);
+      const gachaChannel = await client.channels.fetch(GACHA_CHANNEL_ID).catch(() => null);
+
+      if (remaining > 0) {
+        const embed = new EmbedBuilder()
+          .setColor('#ff7675')
+          .setDescription(`⏳ Already claimed bump reward today. Come back in **${formatCooldown(remaining)}**!`)
+          .setFooter({ text: 'RENMA SYSTEM' });
+
+        const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+
+        if (userObj) {
+          await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+        }
+
+        return;
+      }
+
+      user.exp += BUMP_EXP;
+      user.lastBump = now;
+      await saveUser(discordUser.id, user);
+
+      const summonStatus =
+        user.exp >= SUMMON_COST
+          ? '- 🟢 Ready to summon!'
+          : `- need ${SUMMON_COST - user.exp} more`;
+
+      const embed = new EmbedBuilder()
+        .setColor('#00b894')
+        .setAuthor({
+          name: '🚀 Server Bumped!',
+          iconURL: client.user.displayAvatarURL()
+        })
+        .setDescription(
+          `You bumped the server and earned **+${BUMP_EXP} EXP!** ⭐
+
+> 📊 Total EXP: **${user.exp}**
+> 🎁 Summon cost: **${SUMMON_COST} EXP** ${summonStatus}
+
+*🔁 Bump again in 24h*`
+        )
+        .setFooter({
+          text: 'RENMA SYSTEM • Private Reward',
+          iconURL: client.user.displayAvatarURL()
+        })
+        .setTimestamp();
+
+      const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+
+      if (userObj) {
+        await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+      }
+
+      return;
+    }
+
+    if (message.author.bot) return;
+
+    const id = message.author.id;
+    let member = message.member;
+
+    if (!member && message.guild) {
+      try {
+        member = await message.guild.members.fetch(id);
+      } catch {}
+    }
+
+    await addMessageExp(id, member).catch((err) =>
+      console.error('addExp error:', err.message)
+    );
+
+    const cmd = message.content.toLowerCase().trim();
+
+    const sendCommandReply = async (payload) => {
+      if (payload instanceof EmbedBuilder) {
+        return sendPrivateMessage(message.author, { embeds: [payload] }, message.channel);
+      }
+
+      if (typeof payload === 'string') {
+        return sendPrivateMessage(message.author, { content: payload }, message.channel);
+      }
+
+      return sendPrivateMessage(message.author, payload, message.channel);
+    };
+
+    if (cmd.startsWith('!owner')) {
+      return handleOwnerPrefix(message, sendCommandReply);
+    }
+
+    if (message.channel.id !== GACHA_CHANNEL_ID) return;
+
+    if (cmd === '!help') {
+      return sendCommandReply(buildHelpEmbed());
+    }
+
+    if (cmd === '!ping') {
+      return sendCommandReply(buildPingEmbed());
+    }
+
+    if (cmd === '!gacha') {
+      const panel = buildGachaPanel();
+      return sendCommandReply({ embeds: panel.embeds });
+    }
+
+    if (cmd === '!profile') {
+      const user = await getUser(id);
+      return sendCommandReply(buildProfileEmbed(message.author, user));
+    }
+
+    if (cmd === '!daily') {
+      const embed = await claimDailyEmbed(id);
+      return sendCommandReply(embed);
+    }
+
+    if (cmd === '!leaderboard') {
+      const embed = await buildLeaderboardEmbed();
+      return sendCommandReply(embed);
+    }
+
+    if (cmd === '!inventory') {
+      const user = await getUser(id);
+      return sendCommandReply(buildInventoryEmbed(message.author, user));
+    }
+  } catch (err) {
+    console.error('Message handler error:', err);
+  }
+});
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      return handleSlashCommand(interaction);
+    }
+
+    if (!interaction.isButton()) return;
+
+    if (!interaction.channel || interaction.channel.id !== GACHA_CHANNEL_ID) {
+      return replyEphemeral(interaction, {
+        content: '❌ Buttons only work in the gacha channel!'
+      });
+    }
+
+    const id = interaction.user.id;
+    const user = await getUser(id);
+
+    if (interaction.customId === 'open') {
+      if (user.exp < SUMMON_COST) {
+        return replyEphemeral(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setColor('#ff7675')
+              .setDescription(`❌ Need **${SUMMON_COST - user.exp} more EXP** to summon.\n\n${expBar(user.exp)}`)
+              .setFooter({ text: 'Chat to earn EXP' })
+          ]
+        });
+      }
+
+      user.exp -= SUMMON_COST;
+      const reward = rollReward(user.luck);
+
+      let rewardText = reward;
+
+      if (reward === '⭐ 15 EXP') {
+        user.exp += 15;
+        rewardText = '⭐ **15 EXP** added instantly!';
+      } else if (reward === '⭐ 25 EXP') {
+        user.exp += 25;
+        rewardText = '⭐ **25 EXP** added instantly!';
+      } else {
+        user.inv.push(reward);
+      }
+
+      await saveUser(id, user);
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor(rarityColor[reward] || '#00ff88')
+            .setAuthor({
+              name: '🎁 Summon Result',
+              iconURL: client.user.displayAvatarURL()
+            })
+            .setTitle('🎉 YOU SUMMONED')
+            .setDescription(
+              `✨ ${rewardText}
+
+──────────────────────────
+📊 EXP left: **${user.exp}**
+🎒 Items: **${user.inv.length}**
+
+*🔥 RNG favors the bold*`
+            )
+            .setFooter({ text: 'RENMA SYSTEM' })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    if (interaction.customId === 'exp') {
+      const ready = user.exp >= SUMMON_COST;
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor(ready ? '#00b894' : '#fdcb6e')
+            .setAuthor({
+              name: `${interaction.user.username}'s EXP`,
+              iconURL: interaction.user.displayAvatarURL()
+            })
+            .setDescription(
+              `**Progress:**
+${expBar(user.exp)}
+
+${ready ? '🟢 Ready to summon!' : `⛔ Need **${SUMMON_COST - user.exp} more EXP**`}`
+            )
+            .setFooter({ text: 'Only you can see this' })
+        ]
+      });
+    }
+
+    if (interaction.customId === 'inv') {
+      const items = user.inv.length
+        ? user.inv.map((item, i) => `${i + 1}. ${item}`).join('\n')
+        : 'Inventory empty.';
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor('#6c5ce7')
+            .setAuthor({
+              name: `${interaction.user.username}'s Inventory`,
+              iconURL: interaction.user.displayAvatarURL()
+            })
+            .setDescription(items)
+            .setFooter({ text: `${user.inv.length} items • Only you can see this` })
+        ]
+      });
+    }
+
+    if (interaction.customId === 'bump_reward') {
+      const now = Date.now();
+      const remaining = BUMP_COOLDOWN - (now - user.lastBump);
+      const ready = remaining <= 0;
+
+      return replyEphemeral(interaction, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor(ready ? '#00b894' : '#fdcb6e')
+            .setAuthor({
+              name: '🚀 Bump Reward',
+              iconURL: client.user.displayAvatarURL()
+            })
+            .setDescription(
+              ready
+                ? `✅ Reward ready! Go to <#${BOT_CHANNEL_ID}> and type /bump for **+${BUMP_EXP} EXP**!`
+                : `⏳ Claimed today. Come back in **${formatCooldown(remaining)}**`
+            )
+            .setFooter({ text: 'Only you can see this' })
+        ]
+      });
+    }
+  } catch (err) {
+    console.error('Interaction error:', err);
+
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      interaction.reply({
+        content: '❌ Something went wrong. Please try again.',
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+initDB()
+  .then(() => client.login(process.env.DISCORD_TOKEN))
+  .catch((err) => {
+    console.error('Startup error:', err);
+    process.exit(1);
+  });
