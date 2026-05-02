@@ -5,7 +5,10 @@ const {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
-  MessageFlags
+  MessageFlags,
+  SlashCommandBuilder,
+  REST,
+  Routes
 } = require('discord.js');
 const { Pool } = require('pg');
 
@@ -346,6 +349,24 @@ client.on('ready', async () => {
   } catch (err) {
     console.error('Could not post gacha panel:', err.message);
   }
+
+  // Register slash commands
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('help')
+      .setDescription('Shows the help menu with all commands.'),
+  ].map(cmd => cmd.toJSON());
+
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+  try {
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log('Slash commands registered.');
+  } catch (err) {
+    console.error('Failed to register slash commands:', err);
+  }
 });
 
 function isDisboardBump(message) {
@@ -418,10 +439,10 @@ client.on('messageCreate', async (message) => {
         })
         .setTimestamp();
 
-        const userObj = await client.users.fetch(discordUser.id).catch(() => null);
-        if (userObj) {
-          await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
-        }
+      const userObj = await client.users.fetch(discordUser.id).catch(() => null);
+      if (userObj) {
+        await sendPrivateMessage(userObj, { embeds: [embed] }, gachaChannel);
+      }
 
       return;
     }
@@ -800,9 +821,43 @@ ${expBar(user.exp)}
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
+  if (!interaction.isButton() && !interaction.isChatInputCommand()) return;
 
   try {
+    // Slash command handling
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'help') {
+        const embed = new EmbedBuilder()
+          .setColor('#6c5ce7')
+          .setAuthor({
+            name: '📖 RENMA Command List',
+            iconURL: client.user.displayAvatarURL()
+          })
+          .setDescription(
+            `!gacha 🎴 — View gacha info
+!profile 👤 — View stats
+!daily 📅 — Claim daily EXP (2 day cooldown)
+!leaderboard 🏆 — Top 10 players
+!inventory 🎒 — View items
+!ping 🏓 — Check latency
+
+──────────────────────────
+🚀 Use \`/bump\` in <#${BOT_CHANNEL_ID}> daily for **+${BUMP_EXP} EXP!**`
+          )
+          .setFooter({
+            text: 'RENMA SYSTEM',
+            iconURL: client.user.displayAvatarURL()
+          });
+
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        setTimeout(() => interaction.deleteReply().catch(() => {}), DELETE_AFTER);
+        return;
+      }
+    }
+
+    // Button handling
+    if (!interaction.isButton()) return;
+
     if (!interaction.channel || interaction.channel.id !== GACHA_CHANNEL_ID) {
       await interaction.reply({
         content: '❌ Buttons only work in the gacha channel!',
